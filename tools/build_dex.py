@@ -43,11 +43,11 @@ def get(url, raw=False):
 
 
 def ascii_text(s):
-    for a, b in {"’": "'", "‘": "'", "“": '"', "”": '"', "—": " - ",
-                 "–": "-", "…": "..."}.items():
+    for a, b in {"\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"', "\u2014": " - ",
+                 "\u2013": "-", "\u2026": "..."}.items():
         s = s.replace(a, b)
-    s = s.replace("♀", " F").replace("♂", " M").replace("é", "e").replace("É", "E")
-    s = " ".join(s.replace("­", "").replace("\f", " ").replace("\n", " ").split())
+    s = s.replace("\u2640", " F").replace("\u2642", " M").replace("\u00e9", "e").replace("\u00c9", "E")
+    s = " ".join(s.replace("\u00ad", "").replace("\f", " ").replace("\n", " ").split())
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
 
 
@@ -67,7 +67,8 @@ def sprite(p):
         img = img.resize((max(1, round(img.width * k)), max(1, round(img.height * k))), Image.LANCZOS)
         canvas.paste(img, ((S - img.width) // 2, (S - img.height) // 2), img)
     out = bytearray()
-    for r, g, b in canvas.getdata():
+    px = canvas.tobytes()
+    for r, g, b in zip(px[0::3], px[1::3], px[2::3]):
         out += struct.pack("<H", (r >> 3) << 11 | (g >> 2) << 5 | b >> 3)
     return bytes(out)
 
