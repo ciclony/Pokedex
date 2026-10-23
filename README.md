@@ -4,6 +4,11 @@ Standalone Pokedex firmware for the "Cheap Yellow Display" (two-USB / ST7789 ver
 Every Pokemon from [PokeAPI](https://pokeapi.co/) (1025 species) lives in one file,
 `dex.bin`, on the microSD card. No Wi-Fi needed.
 
+| Home | Search | Pokemon page |
+|---|---|---|
+| ![Home](docs/home.png) | ![Search](docs/search.png) | ![Pikachu](docs/pikachu.png) |
+| ![Charizard](docs/charizard.png) | ![Eevee and its evolutions](docs/eevee.png) | |
+
 The interface follows the Figma "Pokedex Prototype v2.0" by Ricardo Schiniegoski,
 adapted to 320x240 (see [design/DESIGN.md](design/DESIGN.md)).
 
@@ -52,6 +57,11 @@ python tools/send_dex.py COM3 dex.bin
 ```
 
 The card is only replaced once the whole file arrived.
+
+## Screenshots
+
+With the firmware running, `python tools/screenshot.py COM3 out.png [x,y ...]` saves
+the screen as a PNG, tapping the given screen points first.
 
 ## dex.bin format
 

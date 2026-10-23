@@ -16,10 +16,57 @@
 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI, LCD_MISO, HSPI);
 #ifdef CYD_ST7789
-Arduino_GFX *gfx = new Arduino_ST7789(bus, GFX_NOT_DEFINED, 1, false, 240, 320);
+Arduino_GFX *panel = new Arduino_ST7789(bus, GFX_NOT_DEFINED, 1, false, 240, 320);
 #else
-Arduino_GFX *gfx = new Arduino_ILI9341(bus, GFX_NOT_DEFINED, 1);
+Arduino_GFX *panel = new Arduino_ILI9341(bus, GFX_NOT_DEFINED, 1);
 #endif
+
+// Everything is drawn into RAM and sent to the panel in one go: no flicker while a
+// screen is built, and the serial SHOT command can send the screen to a PC. Without
+// PSRAM no single 150 KB block is free, so the framebuffer is 16 bands of 15 rows.
+class BandCanvas : public Arduino_GFX {
+public:
+  explicit BandCanvas(Arduino_GFX *out) : Arduino_GFX(LCD_W, LCD_H), _out(out) {}
+  bool dirty = false;
+  bool begin(int32_t speed = GFX_NOT_DEFINED) override {
+    if (!_out->begin(speed)) return false;
+    for (auto &b : _buf)
+      if (!(b = (uint16_t *)malloc(LCD_W * ROWS * 2))) return false;
+    return true;
+  }
+  uint16_t *row(int y) { return _buf[y / ROWS] + (y % ROWS) * LCD_W; }
+  void writePixelPreclipped(int16_t x, int16_t y, uint16_t c) override {
+    row(y)[x] = c;
+    dirty = true;
+  }
+  void writeFillRectPreclipped(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c) override {
+    for (int j = y; j < y + h; j++) {
+      uint16_t *r = row(j) + x;
+      for (int i = 0; i < w; i++) r[i] = c;
+    }
+    dirty = true;
+  }
+  void writeFastHLine(int16_t x, int16_t y, int16_t w, uint16_t c) override { clipFill(x, y, w, 1, c); }
+  void writeFastVLine(int16_t x, int16_t y, int16_t h, uint16_t c) override { clipFill(x, y, 1, h, c); }
+  void flush(bool = false) override {
+    for (int i = 0; i < NB; i++) _out->draw16bitRGBBitmap(0, i * ROWS, _buf[i], LCD_W, ROWS);
+    dirty = false;
+  }
+
+private:
+  static const int NB = 16, ROWS = LCD_H / NB;
+  Arduino_GFX *_out;
+  uint16_t *_buf[NB] = {};
+  void clipFill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c) {
+    if (x < 0) w += x, x = 0;
+    if (y < 0) h += y, y = 0;
+    if (x + w > LCD_W) w = LCD_W - x;
+    if (y + h > LCD_H) h = LCD_H - y;
+    if (w > 0 && h > 0) writeFillRectPreclipped(x, y, w, h, c);
+  }
+};
+BandCanvas *canvas = new BandCanvas(panel);
+Arduino_GFX *gfx = canvas;
 
 static constexpr uint16_t C(uint32_t h) { return ((h >> 8) & 0xF800) | ((h >> 5) & 0x07E0) | ((h >> 3) & 0x1F); }
 // prototype palette
@@ -79,8 +126,16 @@ static uint16_t tpConv(uint8_t cmd) {
   return (v >> 3) & 0x0FFF;
 }
 
+static int fakeX, fakeY, fakeReads;  // serial TAP: a simulated touch
+
 // screen coordinates of the finger; false if not touched
 static bool touchXY(int *x, int *y) {
+  if (fakeReads > 0) {
+    fakeReads--;
+    *x = fakeX;
+    *y = fakeY;
+    return true;
+  }
   if (digitalRead(TP_INT) == HIGH) return false;
   digitalWrite(TP_CS, LOW);
   int z = tpConv(0xB1) + 4095 - tpConv(0xC1);
@@ -571,6 +626,7 @@ static void serialPut(const String &line) {
     return;
   }
   message("Receiving dex.bin...", "Keep the USB cable connected");
+  canvas->flush();
   Serial.println("OK");
   static uint8_t buf[2048];
   uint32_t left = size;
@@ -623,7 +679,10 @@ void setup() {
   Serial.setTimeout(5000);
   ledcAttach(LCD_BL, 5000, 8);
   ledcWrite(LCD_BL, 255);
-  gfx->begin(40000000);
+  if (!gfx->begin(40000000)) {
+    Serial.println("no RAM for the framebuffer");
+    for (;;) delay(1000);
+  }
   pinMode(TP_CS, OUTPUT);
   digitalWrite(TP_CS, HIGH);
   pinMode(TP_CLK, OUTPUT);
@@ -641,12 +700,30 @@ void setup() {
   }
 }
 
-void loop() {
-  if (Serial.available()) {
-    String line = Serial.readStringUntil('\n');
-    line.trim();
-    if (line.startsWith("PUT ")) serialPut(line);
+// serial commands: PUT (dex.bin upload), SHOT (screenshot as raw RGB565 rows),
+// TAP x y (touch the screen); used by tools/send_dex.py and tools/screenshot.py
+static void serialCommand() {
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line.startsWith("PUT ")) serialPut(line);
+  else if (line == "SHOT") {
+    Serial.printf("SHOT %d %d\n", LCD_W, LCD_H);
+    for (int y = 0; y < LCD_H; y++) Serial.write((uint8_t *)canvas->row(y), LCD_W * 2);
+  } else if (line.startsWith("TAP ")) {
+    sscanf(line.c_str() + 4, "%d %d", &fakeX, &fakeY);
+    fakeReads = 2;
   }
+}
+
+static void step();
+
+void loop() {
+  if (Serial.available()) serialCommand();
+  step();
+  if (canvas->dirty) canvas->flush();
+}
+
+static void step() {
   if (!ready) return;
 
   static uint32_t nextMs;
