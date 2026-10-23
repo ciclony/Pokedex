@@ -5,11 +5,15 @@ Every Pokemon from [PokeAPI](https://pokeapi.co/) (1025 species) lives in one fi
 `dex.bin`, on the microSD card. No Wi-Fi needed.
 
 Each entry shows number, name, category, types, height, weight, base stats,
-the latest English Pokedex description and the official artwork.
+its evolution family, the latest English Pokedex description and the official artwork.
 
-**Controls:** tap the right half of the screen for the next Pokemon, the left half
-for the previous one. Hold to scroll; after a couple of seconds it jumps 10 at a time.
-The last Pokemon viewed is remembered across reboots.
+**Menu:** browse (resumes at the last Pokemon viewed), search by number (keypad,
+shows the name as you type) or search by name (keyboard; partial names work and
+punctuation is ignored, so `mrmime` finds Mr. Mime).
+
+**On a Pokemon:** tap the right half for the next one, the left half for the previous
+one; hold to scroll (after a couple of seconds it jumps 10 at a time). Tap an
+evolution's name to open it, MENU to go back.
 
 ## 1. Build dex.bin
 

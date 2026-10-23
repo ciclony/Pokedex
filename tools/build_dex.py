@@ -5,13 +5,15 @@ API responses and artwork are cached in tools/cache/, so re-runs don't hit PokeA
 again (PokeAPI fair-use policy asks clients to cache).
 
 dex.bin layout (little endian):
-  "PDX1", u16 count, u16 S (sprite side), u32 offset[count]
+  "PDX2", u16 count, u16 S (sprite side), u32 names_offset, u32 offset[count]
   entry: u16 id, u8 type1, u8 type2 (255 = none), u16 height_dm, u16 weight_hg,
-         u8 stats[6] (hp atk def spa spd spe), u8 len + name, u8 len + genus,
+         u8 stats[6] (hp atk def spa spd spe), u8 n + u16 evolution_chain[n] (species ids),
+         u8 len + name, u8 len + genus,
          u16 len + flavor text, S*S RGB565 pixels (on white)
+  names: every name NUL-terminated, in id order (loaded to RAM for search)
 Text is ASCII: the firmware fonts have no accents or gender symbols.
 """
-import io, json, os, struct, sys, time, unicodedata, urllib.request
+import io, json, os, struct, sys, threading, time, unicodedata, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
@@ -19,27 +21,33 @@ API = "https://pokeapi.co/api/v2/"
 S = 120
 TYPES = ["normal", "fighting", "flying", "poison", "ground", "rock", "bug", "ghost", "steel",
          "fire", "water", "grass", "electric", "psychic", "ice", "dragon", "dark", "fairy"]
+LOCKS = {}
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 
 
 def get(url, raw=False):
     path = os.path.join(CACHE, url.split("://", 1)[1].replace("/", "_").replace("?", "_"))
-    if not os.path.exists(path):
-        for attempt in range(5):
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "cyd-pokedex-builder"})
-                data = urllib.request.urlopen(req, timeout=60).read()
-                break
-            except Exception:
-                if attempt == 4:
-                    raise
-                time.sleep(2 ** attempt)
-        with open(path + ".tmp", "wb") as f:
-            f.write(data)
-        os.replace(path + ".tmp", path)  # a killed run never leaves a half file in the cache
+    with LOCKS.setdefault(path, threading.Lock()):  # chains are shared by several species
+        if not os.path.exists(path):
+            download(url, path)
     with open(path, "rb") as f:
         data = f.read()
     return data if raw else json.loads(data)
+
+
+def download(url, path):
+    for attempt in range(5):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "cyd-pokedex-builder"})
+            data = urllib.request.urlopen(req, timeout=60).read()
+            break
+        except Exception:
+            if attempt == 4:
+                raise
+            time.sleep(2 ** attempt)
+    with open(path + ".tmp", "wb") as f:
+        f.write(data)
+    os.replace(path + ".tmp", path)  # a killed run never leaves a half file in the cache
 
 
 def ascii_text(s):
@@ -73,6 +81,12 @@ def sprite(p):
     return bytes(out)
 
 
+def chain_ids(node):
+    yield int(node["species"]["url"].rstrip("/").split("/")[-1])
+    for child in node["evolves_to"]:
+        yield from chain_ids(child)
+
+
 def entry(i):
     sp = get(f"{API}pokemon-species/{i}/")
     p = get(next(v for v in sp["varieties"] if v["is_default"])["pokemon"]["url"])
@@ -84,10 +98,12 @@ def entry(i):
     rec = struct.pack("<HBBHH6B", i, t[0], t[1] if len(t) > 1 else 255, p["height"], p["weight"],
                       *(stats[k] for k in ("hp", "attack", "defense", "special-attack",
                                            "special-defense", "speed")))
+    evo = list(chain_ids(get(sp["evolution_chain"]["url"])["chain"])) if sp["evolution_chain"] else [i]
+    rec += bytes([len(evo)]) + struct.pack(f"<{len(evo)}H", *evo)
     rec += bytes([len(name)]) + name.encode() + bytes([len(genus)]) + genus.encode()
     rec += struct.pack("<H", len(flavor)) + flavor + sprite(p)
     print(f"#{i:04d} {name}", flush=True)
-    return rec
+    return name, rec
 
 
 def main():
@@ -97,19 +113,21 @@ def main():
         API + "pokemon-species/?limit=1", headers={"User-Agent": "cyd-pokedex-builder"})).read()
         .decode().split('"count":')[1].split(",")[0])
     with ThreadPoolExecutor(8) as ex:
-        recs = list(ex.map(entry, range(1, count + 1)))
-    off = 8 + 4 * count
+        names, recs = zip(*ex.map(entry, range(1, count + 1)))
+    off = 12 + 4 * count
     table = b""
     for r in recs:
         table += struct.pack("<I", off)
         off += len(r)
-    data = b"PDX1" + struct.pack("<HH", count, S) + table + b"".join(recs)
+    data = b"PDX2" + struct.pack("<HHI", count, S, off) + table + b"".join(recs)
+    data += b"".join(n.encode() + b"\0" for n in names)
     with open(out, "wb") as f:
         f.write(data)
     # self-check: every offset points at the entry with the matching id
     for k in range(count):
-        o = struct.unpack_from("<I", data, 8 + 4 * k)[0]
+        o = struct.unpack_from("<I", data, 12 + 4 * k)[0]
         assert struct.unpack_from("<H", data, o)[0] == k + 1
+    assert data[off:].split(b"\0")[:count] == [n.encode() for n in names]
     print(f"{out}: {count} Pokemon, {len(data) / 1e6:.1f} MB")
 
 

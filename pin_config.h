@@ -26,6 +26,8 @@
 // raw 12-bit readings at the panel edges
 #define TP_X_MIN 200
 #define TP_X_MAX 3700
+#define TP_Y_MIN 240
+#define TP_Y_MAX 3800
 
 // microSD (VSPI)
 #define SD_SCK 18
