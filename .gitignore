@@ -1,0 +1,4 @@
+tools/cache/
+dex.bin
+dex.tmp
+*.log
