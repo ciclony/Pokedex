@@ -5,11 +5,12 @@ API responses and artwork are cached in tools/cache/, so re-runs don't hit PokeA
 again (PokeAPI fair-use policy asks clients to cache).
 
 dex.bin layout (little endian):
-  "PDX2", u16 count, u16 S (sprite side), u32 names_offset, u32 offset[count]
+  "PDX3", u16 count, u16 S (max sprite side), u32 names_offset, u32 offset[count]
   entry: u16 id, u8 type1, u8 type2 (255 = none), u16 height_dm, u16 weight_hg,
          u8 stats[6] (hp atk def spa spd spe), u8 n + u16 evolution_chain[n] (species ids),
-         u8 len + name, u8 len + genus,
-         u16 len + flavor text, S*S RGB565 pixels (on white)
+         u8 len + name, u8 len + genus, u8 len + abilities ("\n"-separated),
+         u16 len + flavor text, sprite (S box), thumbnail (THUMB box)
+  sprite: u8 w, u8 h, w*h RGB565 pixels (KEY = transparent), cropped to the artwork
   names: every name NUL-terminated, in id order (loaded to RAM for search)
 Text is ASCII: the firmware fonts have no accents or gender symbols.
 """
@@ -18,7 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
 API = "https://pokeapi.co/api/v2/"
-S = 120
+S = 112      # official artwork on the Pokemon page
+THUMB = 52  # and on the home grid cards
+KEY = 0xF81F  # magenta: transparent pixel
 TYPES = ["normal", "fighting", "flying", "poison", "ground", "rock", "bug", "ghost", "steel",
          "fire", "water", "grass", "electric", "psychic", "ice", "dragon", "dark", "fairy"]
 LOCKS = {}
@@ -64,20 +67,20 @@ def en(entries, key):
     return ascii_text(vals[-1]) if vals else ""  # last = most recent game
 
 
-def sprite(p):
-    other = p["sprites"]["other"]["official-artwork"]["front_default"]
-    url = other or p["sprites"]["front_default"]
-    canvas = Image.new("RGB", (S, S), "white")
-    if url:
-        img = Image.open(io.BytesIO(get(url, raw=True))).convert("RGBA")
-        img = img.crop(img.getbbox() or (0, 0, img.width, img.height))
-        k = (S - 4) / max(img.size)
-        img = img.resize((max(1, round(img.width * k)), max(1, round(img.height * k))), Image.LANCZOS)
-        canvas.paste(img, ((S - img.width) // 2, (S - img.height) // 2), img)
-    out = bytearray()
-    px = canvas.tobytes()
-    for r, g, b in zip(px[0::3], px[1::3], px[2::3]):
-        out += struct.pack("<H", (r >> 3) << 11 | (g >> 2) << 5 | b >> 3)
+def sprite(p, box):
+    # official artwork, like the prototype; the game sprite only if a species has none
+    url = p["sprites"]["other"]["official-artwork"]["front_default"] or p["sprites"]["front_default"]
+    if not url:
+        return bytes([1, 1]) + struct.pack("<H", KEY)
+    img = Image.open(io.BytesIO(get(url, raw=True))).convert("RGBA")
+    img = img.crop(img.getbbox() or (0, 0, 1, 1))
+    k = box / max(img.size)
+    img = img.resize((max(1, round(img.width * k)), max(1, round(img.height * k))), Image.LANCZOS)
+    out = bytearray([img.width, img.height])
+    px = img.tobytes()
+    for r, g, b, a in zip(px[0::4], px[1::4], px[2::4], px[3::4]):
+        c = (r >> 3) << 11 | (g >> 2) << 5 | b >> 3
+        out += struct.pack("<H", KEY if a < 128 else KEY - 1 if c == KEY else c)
     return bytes(out)
 
 
@@ -100,8 +103,11 @@ def entry(i):
                                            "special-defense", "speed")))
     evo = list(chain_ids(get(sp["evolution_chain"]["url"])["chain"])) if sp["evolution_chain"] else [i]
     rec += bytes([len(evo)]) + struct.pack(f"<{len(evo)}H", *evo)
+    abil = "\n".join(a["ability"]["name"].replace("-", " ").title()
+                     for a in sorted(p["abilities"], key=lambda a: a["slot"]) if not a["is_hidden"])
     rec += bytes([len(name)]) + name.encode() + bytes([len(genus)]) + genus.encode()
-    rec += struct.pack("<H", len(flavor)) + flavor + sprite(p)
+    rec += bytes([len(abil)]) + abil.encode()
+    rec += struct.pack("<H", len(flavor)) + flavor + sprite(p, S) + sprite(p, THUMB)
     print(f"#{i:04d} {name}", flush=True)
     return name, rec
 
@@ -119,7 +125,7 @@ def main():
     for r in recs:
         table += struct.pack("<I", off)
         off += len(r)
-    data = b"PDX2" + struct.pack("<HHI", count, S, off) + table + b"".join(recs)
+    data = b"PDX3" + struct.pack("<HHI", count, S, off) + table + b"".join(recs)
     data += b"".join(n.encode() + b"\0" for n in names)
     with open(out, "wb") as f:
         f.write(data)

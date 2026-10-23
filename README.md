@@ -4,16 +4,18 @@ Standalone Pokedex firmware for the "Cheap Yellow Display" (two-USB / ST7789 ver
 Every Pokemon from [PokeAPI](https://pokeapi.co/) (1025 species) lives in one file,
 `dex.bin`, on the microSD card. No Wi-Fi needed.
 
-Each entry shows number, name, category, types, height, weight, base stats,
-its evolution family, the latest English Pokedex description and the official artwork.
+The interface follows the Figma "Pokedex Prototype v2.0" by Ricardo Schiniegoski,
+adapted to 320x240 (see [design/DESIGN.md](design/DESIGN.md)).
 
-**Menu:** browse (resumes at the last Pokemon viewed), search by number (keypad,
-shows the name as you type) or search by name (keyboard; partial names work and
-punctuation is ignored, so `mrmime` finds Mr. Mime).
+**Home:** grid of Pokemon cards with official artwork; swipe up/down to change page.
+The round button sorts by number (#) or name (A). Tap the search bar to search by
+name or number: partial names work and punctuation is ignored (`mrmime` finds
+Mr. Mime). OK closes the keyboard and keeps the filter; the x clears it.
 
-**On a Pokemon:** tap the right half for the next one, the left half for the previous
-one; hold to scroll (after a couple of seconds it jumps 10 at a time). Tap an
-evolution's name to open it, MENU to go back.
+**Pokemon page:** types, weight, height, abilities, description, base stats and the
+evolution family. Tap left/right of the artwork for previous/next (hold to scroll,
+it speeds up to 10 at a time), tap an evolution to open it, the arrow to go home.
+The last Pokemon viewed is remembered across reboots.
 
 ## 1. Build dex.bin
 
@@ -23,7 +25,7 @@ python tools/build_dex.py dex.bin
 ```
 
 Downloads ~300 MB from PokeAPI the first time (cached in `tools/cache/`, so re-runs
-are offline) and writes `dex.bin` (~30 MB).
+are offline) and writes `dex.bin` (~25 MB).
 
 ## 2. Flash the firmware
 
