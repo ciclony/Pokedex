@@ -412,8 +412,8 @@ static void tapCard(int x, int y) {
       show(view[page * perPage + i]);
 }
 
-static void releaseHome(int x, int y, int dy) {
-  if (abs(dy) > 30 && y >= gridY - 4) {  // swipe: finger up = next page
+static void releaseHome(int x, int y, int dx, int dy) {
+  if (abs(dy) > 45 && abs(dy) > 2 * abs(dx) && y >= gridY - 4) {  // swipe: finger up = next page
     int p = constrain(page + (dy < 0 ? 1 : -1), 0, pages() - 1);
     if (p != page) {
       page = p;
@@ -654,14 +654,14 @@ void loop() {
   static uint8_t miss = 3;
   static bool down, holdNav;
   static Screen pressedOn;
-  static int x0, y0, lx, ly;
+  static int x0, y0, lx, ly, hx[3], hy[3], n;
   int x, y;
   uint32_t now = millis();
   if (!touchXY(&x, &y)) {
     // resistive panels drop pressure for an instant: a release needs 3 empty reads
     if (down && ++miss >= 3) {
       down = false;
-      if (screen == HOME && pressedOn == HOME) releaseHome(x0, y0, ly - y0);  // home acts on release: it tells taps from swipes
+      if (screen == HOME && pressedOn == HOME) releaseHome(x0, y0, hx[0] - x0, hy[0] - y0);  // home acts on release: it tells taps from swipes
       else if (screen == MON) prefs.putUShort("cur", cur);  // on release only: spares the flash while scrolling
     }
     delay(10);
@@ -670,11 +670,23 @@ void loop() {
   miss = 0;
   lx = x;
   ly = y;
+  // the last readings before the finger lifts are noise (pressure fading), so a
+  // swipe is measured to the sample 3 reads back; a short tap never reaches it
+  if (n < 3) n++;
+  hx[0] = n == 3 ? hx[1] : x0;
+  hy[0] = n == 3 ? hy[1] : y0;
+  hx[1] = hx[2];
+  hy[1] = hy[2];
+  hx[2] = x;
+  hy[2] = y;
   if (!down) {  // new press
     down = true;
     holdNav = false;
     x0 = x;
     y0 = y;
+    n = 0;
+    hx[0] = hx[1] = hx[2] = x;
+    hy[0] = hy[1] = hy[2] = y;
     pressedOn = screen;
     if (screen == SEARCH) tapSearch(x, y);
     else if (screen == MON) {
